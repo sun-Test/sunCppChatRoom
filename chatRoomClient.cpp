@@ -10,8 +10,8 @@
 #include <thread>
 #include <signal.h>
 #include <mutex>
-#define PORT 9888 
- 
+#define PORT 9888
+
 #define MAX_LEN 500
 #define RESET_COLOR "\033[0m"
 #define YELLOW_COLOR "\033[33m"
@@ -20,126 +20,124 @@
 
 using namespace std;
 
-bool disconnect = false;
-thread thSend, thRecv;
-int clientSocket;
-char recvBuffer[MAX_LEN] = {0};
+thread *thSend, *thRecv;
 
 void catchCtrlC(int signal);
 void removeInputPref(int cnt);
-void sendWorker(int clientSocket);
-void recvWorker(int clientSocket);
-void setupUserName();
-int createConnection(sockaddr_in& serverAddr);
 
-void setupAddr(sockaddr_in &sockAddr)
+class RoomClient
 {
-    sockAddr.sin_family=AF_INET;
-	sockAddr.sin_port=htons(PORT);
-	sockAddr.sin_addr.s_addr=INADDR_ANY;
-	::bzero(&sockAddr.sin_zero, 0);
-}
 
-// SOCK_STREAM: tcp protocal, reliable, AF_INET: IPv4
-int createConnection(sockaddr_in& serverAddr)
+public:
+	bool disconnect = false;
+	int clientSocket;
+	struct sockaddr_in serverAddr;
+
+	void setupAddr()
+	{
+		serverAddr.sin_family = AF_INET;
+		serverAddr.sin_port = htons(PORT);
+		serverAddr.sin_addr.s_addr = INADDR_ANY;
+		::bzero(&serverAddr.sin_zero, 0);
+	}
+
+	void setupUserName()
+	{
+		char name[MAX_LEN];
+		cout << "Enter your name : ";
+		cin.getline(name, MAX_LEN);
+		send(clientSocket, name, sizeof(name), 0);
+		cout << CYAN_COLOR << "\n\t  ***** Welcome to Sunny room *****  " << endl
+		     << RESET_COLOR;
+	}
+	// SOCK_STREAM: tcp protocal, reliable, AF_INET: IPv4
+	void createConnection()
+	{
+		if ((clientSocket = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+		{
+			perror("socket: ");
+			exit(-1);
+		}
+		if ((connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(struct sockaddr_in))) < 0)
+		{
+			perror("connect: ");
+			exit(-1);
+		}
+	}
+
+	void sendWorker()
+	{
+		while (true)
+		{
+			cout << YELLOW_COLOR << "You : " << RESET_COLOR;
+			char msg[MAX_LEN];
+			cin.getline(msg, MAX_LEN);
+			send(clientSocket, msg, sizeof(msg), 0);
+			if (strcmp(msg, QUIT_CMD) == 0)
+			{
+				disconnect = true; //thRecv.detach();
+				close(clientSocket);
+				return;
+			}
+		}
+	}
+
+	void recvWorker()
+	{
+		while (true)
+		{
+			if (disconnect)
+				return;
+			char msg[MAX_LEN];
+			int bytesReceived = read(clientSocket, msg, sizeof(msg));
+			if (bytesReceived <= 0)
+				continue;
+			removeInputPref(6);
+			cout << msg << endl;
+			cout << YELLOW_COLOR << "You : " << RESET_COLOR;
+			fflush(stdout);
+		}
+	}
+};
+
+RoomClient client;
+
+void catchCtrlC(int signal)
 {
-    int socketFd;
-	if((socketFd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-	{
-		perror("socket: ");
-		exit(-1);
-	}
-	if((connect(socketFd, (struct sockaddr *)&serverAddr, sizeof(struct sockaddr_in))) < 0)
-	{
-		perror("connect: ");
-		exit(-1);
-	}
-    return socketFd;
+	char msg[MAX_LEN] = QUIT_CMD;
+	send(client.clientSocket, msg, sizeof(msg), 0);
+	client.disconnect = true;
+	thSend->detach();
+	thRecv->detach();
+	close(client.clientSocket);
+	exit(signal);
 }
 
 int main()
 {
-	struct sockaddr_in serverAddr;
-    setupAddr(serverAddr);
+	client.setupAddr();
 	signal(SIGINT, catchCtrlC);
-    while(true)
-    {
-        disconnect = false;
-        clientSocket = createConnection(serverAddr);
-        setupUserName();
-        thread t1(sendWorker, clientSocket);
-        thread t2(recvWorker, clientSocket);
-        thSend = move(t1);
-        thRecv = move(t2);
-        if(thSend.joinable())
-            thSend.join();
-        if(thRecv.joinable())
-            thRecv.join();
-
-    }
+	while (true)
+	{
+		client.createConnection();
+		client.setupUserName();
+		thread t1(&RoomClient::sendWorker, ref(client));
+		thread t2(&RoomClient::recvWorker, ref(client));
+		thSend = &t1;
+		thRecv = &t2;
+		if (t1.joinable())
+			t1.join();
+		if (t2.joinable())
+			t2.join();
+	}
 	return 0;
 }
-
-void setupUserName()
-{
-    char name[MAX_LEN];
-	cout<<"Enter your name : ";
-	cin.getline(name, MAX_LEN);
-	send(clientSocket, name, sizeof(name), 0);
-	cout<<CYAN_COLOR<<"\n\t  ***** Welcome to Sunny room *****  "<<endl<<RESET_COLOR;
-}
-
-void catchCtrlC(int signal) 
-{
-	char msg[MAX_LEN] = QUIT_CMD;
-	send(clientSocket, msg, sizeof(msg), 0);
-	disconnect = true;
-	thSend.detach();
-	thRecv.detach();
-	close(clientSocket);
-	exit(signal);
-}
-
 // remove you:  from terminal
 void removeInputPref(int cnt)
 {
-    string backSpace = "\b";
-	for(int i = 0; i<cnt; i++)
+	string backSpace = "\b";
+	for (int i = 0; i < cnt; i++)
 	{
-		cout<<backSpace;
-	}	
-}
-
-void sendWorker(int clientSocket)
-{
-	while(true)
-	{
-		cout<<YELLOW_COLOR<<"You : "<<RESET_COLOR;
-		char msg[MAX_LEN];
-		cin.getline(msg, MAX_LEN);
-		send(clientSocket, msg, sizeof(msg), 0);
-		if(strcmp(msg, QUIT_CMD)==0)
-		{
-			disconnect = true; //thRecv.detach();	
-			close(clientSocket);
-			return;
-		}	
-	}		
-}
-
-void recvWorker(int clientSocket)
-{
-	while(true)
-	{
-		if(disconnect)
-			return;
-		char msg[MAX_LEN];
-		int bytesReceived = read(clientSocket, msg, sizeof(msg));
-		if(bytesReceived<=0)
-			continue;
-		removeInputPref(6);
-        cout<<msg<<endl;
-		cout<<YELLOW_COLOR<<"You : "<<RESET_COLOR;
-		fflush(stdout);
-	}	
+		cout << backSpace;
+	}
 }
